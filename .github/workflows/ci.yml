@@ -1,0 +1,81 @@
+name: CI
+run-name: >-
+  ${{ github.event_name == 'pull_request' && (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && format('Full CI #{0} @{1} on {2}', github.event.pull_request.number, github.event.pull_request.head.sha, github.event.pull_request.base.sha) || 'Unrequested label' }}
+on:
+  workflow_dispatch:
+    inputs:
+      attest:
+        description: 'TEST issuer transport only; no product qualification'
+        type: boolean
+        default: false
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && format('test-pr-{0}', github.event.pull_request.number) || format('test-label-{0}', github.run_id) }}
+  cancel-in-progress: true
+jobs:
+  native:
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: sleep 15
+  check:
+    name: ${{ (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && 'check' || 'check-not-requested' }}
+    if: always() && (github.event_name != 'pull_request' || github.event.label.name == 'ci:full')
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.native.result }}
+  windows-check:
+    name: ${{ (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && 'windows-check' || 'windows-check-not-requested' }}
+    if: always() && (github.event_name != 'pull_request' || github.event.label.name == 'ci:full')
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.native.result }}
+  macos-qualification:
+    name: ${{ (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && 'macos-qualification' || 'macos-not-requested' }}
+    if: always() && (github.event_name != 'pull_request' || github.event.label.name == 'ci:full')
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.native.result }}
+  full:
+    name: ${{ (github.event_name != 'pull_request' || github.event.label.name == 'ci:full') && 'full-ci' || 'ci-not-requested' }}
+    if: always() && (github.event_name != 'pull_request' || github.event.label.name == 'ci:full')
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.native.result }}
+  attest-full:
+    if: github.event_name == 'workflow_dispatch' && inputs.attest
+    needs: [native, check, windows-check, macos-qualification, full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions:
+      statuses: write
+    steps:
+      - name: Prove existing trusted GitHub Actions status issuer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=success -f context=full-ci \
+            -f description='TEST trusted issuer transport; fixtures only' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" > /dev/null
